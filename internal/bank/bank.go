@@ -10,3 +10,7 @@ type Bank struct {
 	}
 	Grades int `json:"grades"`
 }
+
+type Banks []Bank
+
+
