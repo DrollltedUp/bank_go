@@ -1,7 +1,14 @@
 package main
 
-import "fmt"
+import (
+	"log"
+	"net/http"
+
+	ticketcontroller "github.com/DrollltedUp/bank_go/internal/ticket-controller"
+)
 
 func main() {
-	fmt.Println("Hello Worlds")
+	http.HandleFunc("/api/bank/location", ticketcontroller.BankLocationHandler)
+	log.Println("Server started on :8080")
+	log.Fatal(http.ListenAndServe(":8080", nil))
 }

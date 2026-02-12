@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 )
 
@@ -40,50 +41,52 @@ type DadataBankResponse struct {
 
 // Functions
 
-func GetBankAdress(api, query string) (string, error) {
+func GetBankAddress(apiKey, query string) (string, error) {
+	log.Printf("🔍 Запрос к DaData: query=%s", query)
+
 	url := "https://suggestions.dadata.ru/suggestions/api/4_1/rs/suggest/bank"
 
-	respBody := BankSuggestRequest{
+	reqBody := BankSuggestRequest{
 		Query:  query,
 		Count:  1,
 		Status: []string{"ACTIVE"},
 	}
 
-	jsonBody, _ := json.Marshal(respBody)
+	jsonBody, _ := json.Marshal(reqBody)
+	log.Printf("📦 Тело запроса: %s", string(jsonBody))
 
 	req, _ := http.NewRequest("POST", url, bytes.NewReader(jsonBody))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
-	req.Header.Set("Authorization", "Token "+api)
+	req.Header.Set("Authorization", "Token "+apiKey)
 
 	client := &http.Client{}
-	response, err := client.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
+		log.Printf("❌ Ошибка HTTP запроса: %v", err)
 		return "", err
 	}
-	defer response.Body.Close()
+	defer resp.Body.Close()
 
-	body, _ := io.ReadAll(response.Body)
+	log.Printf("📊 Статус ответа DaData: %s", resp.Status)
+
+	body, _ := io.ReadAll(resp.Body)
+	log.Printf("📄 Тело ответа DaData: %s", string(body))
 
 	var result DadataBankResponse
 	if err := json.Unmarshal(body, &result); err != nil {
+		log.Printf("❌ Ошибка парсинга JSON: %v", err)
 		return "", err
 	}
 
 	if len(result.Suggestions) == 0 {
+		log.Printf("⚠️ Банк не найден в DaData")
 		return "", fmt.Errorf("банк не найден")
 	}
 
 	bank := result.Suggestions[0]
-	if bank.Data.Address.UnrestrictedValue != "" {
-		return bank.Data.Address.UnrestrictedValue, nil
-	}
-	if bank.Data.Address.Value != "" {
-		return bank.Data.Address.Value, nil
-	}
-	if bank.Data.Address.Source != "" {
-		return bank.Data.Address.Source, nil
-	}
+	address := bank.Data.Address.UnrestrictedValue
+	log.Printf("✅ Найден адрес: %s", address)
 
-	return "", fmt.Errorf("адрес не найден")
+	return address, nil
 }
