@@ -11,6 +11,9 @@ import (
 func main() {
 	r := mux.NewRouter()
 	router.ListTicketRouter(r)
-	log.Println("Server started on :8080")
-	log.Fatal(http.ListenAndServe(":8080", r))
+	log.Println("✅ Сервер запущен на :8080")
+	http.Handle("/", r)
+	if err := http.ListenAndServe(":8080", r); err != nil {
+		log.Fatal(err)
+	}
 }

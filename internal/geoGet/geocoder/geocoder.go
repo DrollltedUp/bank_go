@@ -3,9 +3,10 @@ package geocoder
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
-	"net/url"
 	"strconv"
+	"strings"
 )
 
 type NominatimResponse struct {
@@ -14,19 +15,13 @@ type NominatimResponse struct {
 	DisplayName string `json:"display_name"`
 }
 
-func AddressToCoordsNominatim(address string) (lat, lng float64, formattedAddress string, err error) {
+func AddressToCoords(address string) (lat, lng float64, formattedAddress string, err error) {
 	baseURL := "https://nominatim.openstreetmap.org/search"
 
-	params := url.Values{}
-	params.Add("q", address)
-	params.Add("format", "json")
-	params.Add("limit", "1")
+	params := fmt.Sprintf("%s?q=%s&format=json&limit=1", baseURL, urlQueryEscape(address))
 
-	reqURL := fmt.Sprintf("%s?%s", baseURL, params.Encode())
-
-	req, _ := http.NewRequest("GET", reqURL, nil)
-	// Nominatim требует User-Agent
-	req.Header.Set("User-Agent", "YourAppName/1.0")
+	req, _ := http.NewRequest("GET", params, nil)
+	req.Header.Set("User-Agent", "BankLocator/1.0")
 
 	client := &http.Client{}
 	resp, err := client.Do(req)
@@ -35,8 +30,10 @@ func AddressToCoordsNominatim(address string) (lat, lng float64, formattedAddres
 	}
 	defer resp.Body.Close()
 
+	body, _ := io.ReadAll(resp.Body)
+
 	var result []NominatimResponse
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	if err := json.Unmarshal(body, &result); err != nil {
 		return 0, 0, "", err
 	}
 
@@ -48,4 +45,29 @@ func AddressToCoordsNominatim(address string) (lat, lng float64, formattedAddres
 	lng, _ = strconv.ParseFloat(result[0].Lon, 64)
 
 	return lat, lng, result[0].DisplayName, nil
+}
+
+func urlQueryEscape(s string) string {
+	return strings.ReplaceAll(urlPathEscape(s), " ", "%20")
+}
+
+func urlPathEscape(s string) string {
+	spaceCount := strings.Count(s, " ")
+
+	if spaceCount == 0 {
+		return s
+	}
+
+	var result strings.Builder
+	last := 0
+	for i := 0; i < len(s); i++ {
+		if s[i] == ' ' {
+			result.WriteString(s[last:i])
+			result.WriteString("%20")
+			last = i + 1
+		}
+	}
+	result.WriteString(s[last:])
+
+	return result.String()
 }
