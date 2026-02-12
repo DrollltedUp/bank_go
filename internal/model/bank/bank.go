@@ -1,7 +1,7 @@
 package bank
 
 type Bank struct {
-	ID          int    `json:"id"`
+	ID          uint   `json:"id"`
 	Company     string `json:"company"`
 	Address     string `json:"address"`
 	Coordinates struct {
@@ -12,5 +12,3 @@ type Bank struct {
 }
 
 type Banks []Bank
-
-
