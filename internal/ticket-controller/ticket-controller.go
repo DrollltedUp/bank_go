@@ -21,7 +21,7 @@ func CreateTicket(w http.ResponseWriter, r *http.Request) {
 
 // Request от Flutter
 type GeoRequest struct {
-	Query string `json:"query"` // Название банка, БИК или адрес
+	Query string `json:"query"`
 }
 
 // ResponseHandler - эндпоинт для Flutter
