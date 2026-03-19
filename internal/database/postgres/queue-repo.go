@@ -1,11 +1,10 @@
-package queuerepo
+package postgres
 
 import (
 	"database/sql"
 	"fmt"
 	"time"
 
-	"github.com/DrollltedUp/bank_go/internal/database/postgres"
 	"github.com/DrollltedUp/bank_go/internal/model/ticket"
 	"github.com/google/uuid"
 )
@@ -14,9 +13,9 @@ type QueueRepository struct {
 	db *sql.DB
 }
 
-func newQueueRepository() *QueueRepository {
+func NewQueueRepository() *QueueRepository {
 	return &QueueRepository{
-		db: postgres.GetPostgresClient().DB,
+		db: GetPostgresClient().DB,
 	}
 }
 
@@ -157,6 +156,92 @@ func (r *QueueRepository) CreateTicker(branchID, serviceCode string) (*ticket.Ti
 	}
 
 	return ticket, nil
+}
+
+// GetNextTicket - получить следующий талон для обслуживания
+func (r *QueueRepository) GetNextTicket(branchID string) (*ticket.Ticket, error) {
+	tx, err := r.db.Begin()
+	if err != nil {
+		return nil, fmt.Errorf("failed to begin transaction: %v", err)
+	}
+	defer tx.Rollback()
+
+	// 1. Получаем очередь
+	var queueID string
+	err = tx.QueryRow(
+		`SELECT queue_id FROM queues WHERE branch_id = $1 FOR UPDATE`,
+		branchID,
+	).Scan(&queueID)
+	if err != nil {
+		return nil, fmt.Errorf("queue not found: %v", err)
+	}
+
+	// 2. Находим первый ожидающий талон
+	var ticketID, ticketNumber, serviceCode, status string
+	var position, waitTime int
+	var createdAt time.Time
+
+	err = tx.QueryRow(
+		`SELECT ticket_id, ticket_number, service_code, position, wait_time, created_at, status
+		 FROM tickets 
+		 WHERE queue_id = $1 AND status = 'waiting'
+		 ORDER BY created_at ASC
+		 LIMIT 1
+		 FOR UPDATE`, // Блокируем талон
+		queueID,
+	).Scan(
+		&ticketID, &ticketNumber, &serviceCode,
+		&position, &waitTime, &createdAt, &status,
+	)
+
+	if err == sql.ErrNoRows {
+		return nil, fmt.Errorf("no tickets in queue")
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to get next ticket: %v", err)
+	}
+
+	// 3. Обновляем статус талона
+	_, err = tx.Exec(
+		`UPDATE tickets SET status = 'called', called_at = $1 WHERE ticket_id = $2`,
+		time.Now(), ticketID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to update ticket status: %v", err)
+	}
+
+	// 4. Уменьшаем счетчик в очереди
+	_, err = tx.Exec(
+		`UPDATE queues SET tickets_count = tickets_count - 1 WHERE queue_id = $1`,
+		queueID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to update queue count: %v", err)
+	}
+
+	if err = tx.Commit(); err != nil {
+		return nil, fmt.Errorf("failed to commit transaction: %v", err)
+	}
+
+	// 5. Получаем дополнительную информацию
+	var bankName, serviceName string
+	r.db.QueryRow(`SELECT bank_name FROM branches WHERE branch_id = $1`, branchID).Scan(&bankName)
+	r.db.QueryRow(`SELECT service_name FROM service_types WHERE service_code = $1`, serviceCode).Scan(&serviceName)
+
+	ticketObj := &ticket.Ticket{
+		ID:           ticketID,
+		TicketNumber: ticketNumber,
+		ServiceCode:  serviceCode,
+		ServiceName:  serviceName,
+		BranchID:     branchID,
+		BranchName:   bankName,
+		Position:     position,
+		WaitTime:     waitTime,
+		CreatedAt:    createdAt,
+		Status:       "called",
+	}
+
+	return ticketObj, nil
 }
 
 // Queue status
