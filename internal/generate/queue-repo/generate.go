@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/DrollltedUp/bank_go/internal/database/postgres"
 	"github.com/DrollltedUp/bank_go/internal/model/ticket"
 	"github.com/google/uuid"
 )
@@ -13,11 +14,11 @@ type QueueRepository struct {
 	db *sql.DB
 }
 
-// func newQueueRepository() *QueueRepository{
-// 	return &QueueRepository{
-// 		db: ,
-// 	}
-// }
+func newQueueRepository() *QueueRepository {
+	return &QueueRepository{
+		db: postgres.GetPostgresClient().DB,
+	}
+}
 
 // Functions for Queue
 
@@ -111,7 +112,7 @@ func (r *QueueRepository) CreateTicker(branchID, serviceCode string) (*ticket.Ti
 	// Create Ticker
 	ticketID := uuid.New().String()
 	position := ticketCount + 1
-	createdAt := time.Now().Format("15:04:05")
+	createdAt := time.Now()
 
 	_, err = tx.Exec(
 		`INSERT INTO tickets (
@@ -151,12 +152,90 @@ func (r *QueueRepository) CreateTicker(branchID, serviceCode string) (*ticket.Ti
 		BranchName:   bankName,
 		Position:     position,
 		WaitTime:     waitTime,
-		CreatedAt:    , // createdAt - Ошибка cannot use createdAt (variable of type string) as time.Time value in struct literal
+		CreatedAt:    createdAt, // createdAt - Ошибка cannot use createdAt (variable of type string) as time.Time value in struct literal
 		Status:       "waiting",
 	}
 
 	return ticket, nil
-
 }
 
+// Queue status
+func (r *QueueRepository) GetQueueStatus(branchID string) (ticketCount, window int, avgWaitTime float64, err error) {
+	err = r.db.QueryRow(`SELECT COALESCE(tickets_count, 0) FROM queues WHERE branch_id = $1`, branchID).Scan(&ticketCount)
+	if err != nil && err != sql.ErrNoRows {
+		return 0, 0, 0, err
+	}
 
+	err = r.db.QueryRow(`SELECT COALESCE(window, 2) FROM branches WHERE branch_id = $1`, branchID).Scan(&window)
+	if err != nil {
+		window = 2
+	}
+
+	if window > 0 {
+		avgWaitTime = float64(ticketCount) / float64(window) * 5
+	}
+	return ticketCount, window, avgWaitTime, nil
+}
+
+func (r *QueueRepository) GetTicketsByService(branchID string) (map[string]int, error) {
+	query := `
+		SELECT t.service_code, COUNT(*) as count
+		FROM tickets t
+		JOIN queues q ON t.queue_id = q.queue_id
+		WHERE q.branch_id = $1 AND t.status = 'waiting'
+		GROUP BY t.service_code
+	`
+
+	rows, err := r.db.Query(query, branchID)
+	if err != nil {
+		return nil, err
+	}
+
+	defer rows.Close()
+
+	result := make(map[string]int)
+	for rows.Next() {
+		var code string
+		var count int
+		if err := rows.Scan(&code, &count); err == nil {
+			result[code] = count
+		}
+	}
+
+	return result, nil
+}
+
+func (r *QueueRepository) CalculateLoadScore(branchID string) (int, error) {
+	ticketCount, window, _, err := r.GetQueueStatus(branchID)
+	if err != nil {
+		return 1, err
+	}
+
+	if window == 0 {
+		window = 2
+	}
+
+	loadPerWindow := float64(ticketCount) / float64(window)
+
+	switch {
+	case loadPerWindow < 2:
+		return 1, nil
+	case loadPerWindow < 4:
+		return 2, nil
+	case loadPerWindow < 7:
+		return 3, nil
+	case loadPerWindow < 10:
+		return 4, nil
+	default:
+		return 5, nil
+	}
+}
+
+func (r *QueueRepository) SaveLoadHistory(branchID string, loadScore, ticket, windows int) error {
+	query := `
+		INSERT INTO branch_load_history (branch_id, load_score, tickets_total, windows)
+		VALUES ($1, $2, $3, $4)
+	`
+	_, err := r.db.Exec(query, branchID, loadScore, ticket, windows)
+	return err
+}
