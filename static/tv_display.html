@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Банковское ТВ-табло (Real-time)</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; font-family: 'Segoe UI', sans-serif; }
+        body { background: #1a1a2e; padding: 20px; }
+        h1 { color: #fff; text-align: center; margin-bottom: 30px; font-size: 2.5em; text-shadow: 0 0 10px rgba(0,255,255,0.5); }
+        .branches { display: grid; grid-template-columns: repeat(auto-fit, minmax(400px, 1fr)); gap: 20px; }
+        .branch-card { background: #16213e; border-radius: 15px; padding: 20px; color: #fff; box-shadow: 0 0 20px rgba(0,255,255,0.2); transition: all 0.3s; border: 1px solid #0f3460; }
+        .branch-card:hover { transform: translateY(-5px); box-shadow: 0 0 30px rgba(0,255,255,0.4); }
+        .branch-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; border-bottom: 1px solid #0f3460; padding-bottom: 10px; }
+        .branch-name { font-size: 1.2em; font-weight: bold; color: #00fff5; }
+        .load-badge { padding: 5px 10px; border-radius: 20px; font-size: 0.9em; font-weight: bold; }
+        .load-1 { background: #00ff88; color: #000; }
+        .load-2 { background: #88ff00; color: #000; }
+        .load-3 { background: #ffff00; color: #000; }
+        .load-4 { background: #ff8800; color: #000; }
+        .load-5 { background: #ff0000; color: #fff; }
+        .stats { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; margin: 15px 0; }
+        .stat { background: #0f3460; padding: 10px; border-radius: 10px; text-align: center; }
+        .stat-label { font-size: 0.8em; color: #aaa; }
+        .stat-value { font-size: 1.5em; font-weight: bold; color: #00fff5; }
+        .ticket-display { background: #0f3460; padding: 15px; border-radius: 10px; margin: 15px 0; text-align: center; position: relative; overflow: hidden; }
+        .ticket-display::before { content: ''; position: absolute; top: -50%; left: -50%; width: 200%; height: 200%; background: linear-gradient(45deg, transparent, rgba(0,255,255,0.1), transparent); animation: shine 3s infinite; }
+        @keyframes shine { 0% { transform: translateX(-100%); } 100% { transform: translateX(100%); } }
+        .ticket-number { font-size: 3em; font-weight: bold; color: #00fff5; text-shadow: 0 0 10px #00fff5; }
+        .ticket-service { font-size: 1.2em; color: #fff; margin-top: 5px; }
+        .queue-list { max-height: 200px; overflow-y: auto; margin-top: 15px; }
+        .queue-item { display: flex; justify-content: space-between; padding: 8px; border-bottom: 1px solid #0f3460; animation: fadeIn 0.5s; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(-10px); } to { opacity: 1; transform: translateY(0); } }
+        .notification { position: fixed; top: 20px; right: 20px; background: #00fff5; color: #000; padding: 15px; border-radius: 10px; animation: slideIn 0.3s; z-index: 1000; }
+        @keyframes slideIn { from { transform: translateX(100%); } to { transform: translateX(0); } }
+        .status { text-align: center; color: #00fff5; margin-top: 20px; font-size: 0.9em; }
+        .new-ticket { animation: pulse 1s; }
+        @keyframes pulse { 0% { background: #00fff5; } 100% { background: #0f3460; } }
+    </style>
+</head>
+<body>
+    <h1>🏦 Банковское табло реального времени</h1>
+    <div class="branches" id="branches"></div>
+    <div class="status" id="status">🔄 Подключение к серверу...</div>
+
+    <script>
+        const WS_URL = 'ws://localhost:8080/ws';
+        const API_URL = 'http://localhost:8080';
+        let ws = null;
+        let notificationTimeout = null;
+        
+        function showNotification(message, type = 'info') {
+            const notification = document.createElement('div');
+            notification.className = 'notification';
+            notification.innerHTML = message;
+            document.body.appendChild(notification);
+            
+            setTimeout(() => {
+                notification.remove();
+            }, 3000);
+        }
+        
+        function connectWebSocket() {
+            ws = new WebSocket(WS_URL);
+            
+            ws.onopen = function() {
+                document.getElementById('status').innerHTML = '🟢 Подключено к серверу';
+                loadInitialData();
+            };
+            
+            ws.onclose = function() {
+                document.getElementById('status').innerHTML = '🔴 Отключено. Переподключение...';
+                setTimeout(connectWebSocket, 3000);
+            };
+            
+            ws.onmessage = function(event) {
+                const data = JSON.parse(event.data);
+                handleWebSocketMessage(data);
+            };
+        }
+        
+        function handleWebSocketMessage(data) {
+            console.log('WebSocket сообщение:', data);
+            
+            if (data.type === 'ticket_created') {
+                showNotification(`🎫 Новый талон ${data.ticket} (${data.service})`, 'success');
+                updateBranch(data.branch_id);
+            }
+            
+            if (data.type === 'ticket_called') {
+                showNotification(`📞 Вызван талон ${data.ticket} (${data.service})`, 'info');
+                updateBranch(data.branch_id);
+            }
+        }
+        
+        async function loadInitialData() {
+            try {
+                const response = await fetch(`${API_URL}/api/bank/branches`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ bank: 'Сбербанк', city: 'Москва' })
+                });
+                
+                const branches = await response.json();
+                displayBranches(branches);
+            } catch (error) {
+                console.error('Ошибка загрузки:', error);
+            }
+        }
+        
+        async function updateBranch(branchId) {
+            try {
+                const response = await fetch(`${API_URL}/tickets/${branchId}/status`);
+                const status = await response.json();
+                updateBranchCard(branchId, status);
+            } catch (error) {
+                console.error('Ошибка обновления:', error);
+            }
+        }
+        
+        function updateBranchCard(branchId, status) {
+            const card = document.getElementById(`card-${branchId}`);
+            if (card) {
+                // Обновляем только числовые значения без перезагрузки страницы
+                const ticketElement = card.querySelector('.ticket-count');
+                if (ticketElement) ticketElement.textContent = status.tickets || 0;
+                
+                const waitElement = card.querySelector('.wait-time');
+                if (waitElement) waitElement.textContent = status.wait_time || 0;
+                
+                // Добавляем анимацию
+                card.classList.add('new-ticket');
+                setTimeout(() => card.classList.remove('new-ticket'), 1000);
+            } else {
+                loadInitialData(); // Если карточки нет - перезагружаем всё
+            }
+        }
+        
+        async function displayBranches(branches) {
+            const container = document.getElementById('branches');
+            container.innerHTML = '';
+            
+            for (const branch of branches.slice(0, 4)) {
+                const branchId = `${branch.bank_name}-${branch.lat.toFixed(4)}-${branch.lng.toFixed(4)}`;
+                
+                try {
+                    const statusRes = await fetch(`${API_URL}/tickets/${branchId}/status`);
+                    const status = await statusRes.json();
+                    
+                    const card = document.createElement('div');
+                    card.id = `card-${branchId}`;
+                    card.className = 'branch-card';
+                    
+                    const loadClass = `load-${status.load_score || 1}`;
+                    const loadLabels = {1:'Свободно',2:'Нормально',3:'Загружено',4:'Многолюдно',5:'Переполнено'};
+                    
+                    // Получаем текущий талон (для демо берем случайный)
+                    const currentTicket = `A${Math.floor(Math.random()*100)}`;
+                    
+                    card.innerHTML = `
+                        <div class="branch-header">
+                            <span class="branch-name">${branch.address.split(',')[0]}</span>
+                            <span class="load-badge ${loadClass}">${loadLabels[status.load_score]}</span>
+                        </div>
+                        
+                        <div class="ticket-display">
+                            <div class="ticket-number" id="current-${branchId}">${currentTicket}</div>
+                            <div class="ticket-service">Текущий талон</div>
+                        </div>
+                        
+                        <div class="stats">
+                            <div class="stat">
+                                <div class="stat-label">В очереди</div>
+                                <div class="stat-value ticket-count">${status.tickets || 0}</div>
+                            </div>
+                            <div class="stat">
+                                <div class="stat-label">Ожидание</div>
+                                <div class="stat-value wait-time">${status.wait_time || 0} мин</div>
+                            </div>
+                            <div class="stat">
+                                <div class="stat-label">Окна</div>
+                                <div class="stat-value">${status.windows || 2}</div>
+                            </div>
+                        </div>
+                        
+                        <div class="queue-list" id="queue-${branchId}">
+                            ${generateQueueHtml(status.distribution)}
+                        </div>
+                        
+                        <div style="font-size:0.8em; color:#666; margin-top:10px;">
+                            ID: ${branchId.substring(0,20)}...
+                        </div>
+                    `;
+                    
+                    container.appendChild(card);
+                } catch (e) {
+                    console.error(e);
+                }
+            }
+        }
+        
+        function generateQueueHtml(distribution) {
+            if (!distribution) return '<div style="color:#666;">Нет талонов</div>';
+            
+            let html = '';
+            const services = {
+                'CASH': 'Касса', 'PENSION': 'Пенсия', 'DEBIT': 'Карты',
+                'CREDIT': 'Кредит', 'VIP': 'VIP', 'BUSINESS': 'Бизнес'
+            };
+            
+            for (const [service, count] of Object.entries(distribution)) {
+                if (count > 0) {
+                    for (let i = 0; i < Math.min(count, 3); i++) {
+                        const ticketNum = `${service.charAt(0)}${Math.floor(Math.random()*100)}`;
+                        html += `<div class="queue-item">🎫 ${ticketNum} <span style="color:#00fff5">${services[service] || service}</span></div>`;
+                    }
+                }
+            }
+            
+            return html || '<div style="color:#666;">Очередь пуста</div>';
+        }
+        
+        // Подключаемся
+        connectWebSocket();
+        
+        // Периодическая проверка соединения
+        setInterval(() => {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ type: 'ping' }));
+            }
+        }, 30000);
+    </script>
+</body>
+</html>

@@ -17,7 +17,11 @@ var Router = func(router *mux.Router) {
 	router.HandleFunc("/tickets/{id}", ticketcontroller.CreateTicketHandler).Methods("POST")
 	router.HandleFunc("/tickets/{id}/status", ticketcontroller.GetQueueStatusHandler).Methods("GET")
 	router.HandleFunc("/tickets/{id}/call", ticketcontroller.CallNextTicketHandler).Methods("POST")
+	router.HandleFunc("/tickets/{id}/current", ticketcontroller.GetCurrentTicketHandler).Methods("GET")
 
 	// Для обратной совместимости
 	router.HandleFunc("/grades", ticketcontroller.LoadGrades).Methods("GET")
+
+	// WebSocket для real-time обновлений
+	router.HandleFunc("/ws", ticketcontroller.WebSocketHandler)
 }

@@ -1,17 +1,21 @@
 package ticketcontroller
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
 
+	"github.com/DrollltedUp/bank_go/internal/database/postgres"
 	queue "github.com/DrollltedUp/bank_go/internal/generate/manager-queue"
 	"github.com/DrollltedUp/bank_go/internal/geoGet/geocoder"
 	"github.com/DrollltedUp/bank_go/internal/geoGet/overpass"
 	"github.com/DrollltedUp/bank_go/internal/model/bank"
 	"github.com/DrollltedUp/bank_go/internal/model/ticket"
+	"github.com/DrollltedUp/bank_go/internal/websocketStart"
 	"github.com/gorilla/mux"
+	"github.com/gorilla/websocket"
 )
 
 var (
@@ -118,47 +122,36 @@ func CreateTicketHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Получаем branch_id из URL
 	vars := mux.Vars(r)
 	branchID := vars["id"]
 
-	log.Printf("🎫 Создание талона для отделения: %s", branchID)
+	log.Printf("🎫 Создание талона для: %s", branchID)
 
-	if branchID == "" {
-		http.Error(w, "branch_id is required", 400)
-		return
-	}
-
-	// Парсим тело запроса
 	var req struct {
 		ServiceCode string `json:"service_code"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		// Если тело пустое или невалидное, используем значения по умолчанию
 		req.ServiceCode = "CASH"
 	}
 
-	serviceCode := req.ServiceCode
-	if serviceCode == "" {
-		serviceCode = "CASH" // По умолчанию
-	}
-
-	log.Printf("📋 Услуга: %s", serviceCode)
-
-	// СОЗДАЕМ ТАЛОН через QueueManager
-	ticket, err := queueManager.CreateTicket(branchID, serviceCode)
+	ticket, err := queueManager.CreateTicket(branchID, req.ServiceCode)
 	if err != nil {
-		log.Printf("❌ Ошибка создания талона: %v", err)
-		http.Error(w, fmt.Sprintf("Failed to create ticket: %v", err), 500)
+		http.Error(w, err.Error(), 500)
 		return
 	}
 
-	log.Printf("✅ Талон создан: %s", ticket.TicketNumber)
+	// Отправляем уведомление через WebSocket
+	wsManager := websocketStart.GetWebSocketManager()
+	wsManager.NotifyTicketCreated(
+		branchID,
+		ticket.TicketNumber,
+		ticket.ServiceName,
+		ticket.Position,
+		ticket.WaitTime,
+	)
 
-	// Отправляем ответ
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(ticket)
 }
 
@@ -208,26 +201,19 @@ func CallNextTicketHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	branchID := vars["id"]
 
-	if branchID == "" {
-		http.Error(w, "branch_id is required", 400)
-		return
-	}
-
-	log.Printf("📞 Вызов следующего клиента: %s", branchID)
-
 	ticket, err := queueManager.CallNextTicket(branchID)
 	if err != nil {
-		log.Printf("❌ Ошибка вызова: %v", err)
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusNotFound)
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"success": false,
-			"error":   "No tickets in queue",
-		})
+		http.Error(w, err.Error(), 404)
 		return
 	}
 
-	log.Printf("✅ Вызван талон: %s", ticket.TicketNumber)
+	// Отправляем уведомление через WebSocket
+	wsManager := websocketStart.GetWebSocketManager()
+	wsManager.NotifyTicketCalled(
+		branchID,
+		ticket.TicketNumber,
+		ticket.ServiceName,
+	)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
@@ -236,13 +222,109 @@ func CallNextTicketHandler(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// Получить текущий вызываемый талон
+func GetCurrentTicketHandler(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	branchID := vars["id"]
+
+	if branchID == "" {
+		http.Error(w, "branch_id is required", 400)
+		return
+	}
+
+	// Получаем последний вызванный талон из БД
+	var ticket ticket.Ticket
+	err := postgres.GetPostgresClient().DB.QueryRow(
+		`SELECT ticket_id, ticket_number, service_code, service_name, created_at 
+         FROM tickets 
+         WHERE branch_id = $1 AND status = 'called' 
+         ORDER BY called_at DESC 
+         LIMIT 1`,
+		branchID,
+	).Scan(&ticket.ID, &ticket.TicketNumber, &ticket.ServiceCode, &ticket.ServiceName, &ticket.CreatedAt)
+
+	if err == sql.ErrNoRows {
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"ticket_number": "---",
+			"service_name":  "Ожидание",
+		})
+		return
+	}
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+
+	json.NewEncoder(w).Encode(ticket)
+}
+
 // GetServiceTypesHandler - получить список услуг
 func GetServiceTypesHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(ticket.ServiceTypes)
 }
 
-// // Вспомогательная функция
-// func generateBranchID(bankName string, lat, lng float64) string {
-// 	return fmt.Sprintf("%s-%.4f-%.4f", bankName, lat, lng)
-// }
+// ============================ WebSocket =====================
+
+// ============================ WebSocket =====================
+
+var upgrader = websocket.Upgrader{
+	CheckOrigin: func(r *http.Request) bool {
+		return true // Разрешаем все подключения (для разработки)
+	},
+}
+
+// WebSocketHandler - обработчик WebSocket соединений
+func WebSocketHandler(w http.ResponseWriter, r *http.Request) {
+	conn, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		log.Printf("❌ Ошибка WebSocket: %v", err)
+		return
+	}
+
+	// ИСПРАВЛЕНО: используем ВАШ тип Client из пакета websocketStart
+	client := &websocketStart.Client{
+		Conn: conn,
+		Send: make(chan []byte, 256),
+	}
+
+	wsManager := websocketStart.GetWebSocketManager()
+
+	// ИСПРАВЛЕНО: обращаемся к каналам менеджера (они неэкспортируемые, но мы в том же пакете?)
+	// Если вы в другом пакете, нужно сделать их экспортируемыми или добавить методы
+	wsManager.Register <- client
+
+	// Отправка сообщений клиенту
+	go func() {
+		defer func() {
+			wsManager.Unregister <- client
+			conn.Close()
+		}()
+
+		for {
+			select {
+			case message, ok := <-client.Send:
+				if !ok {
+					conn.WriteMessage(websocket.CloseMessage, []byte{})
+					return
+				}
+				conn.WriteMessage(websocket.TextMessage, message)
+			}
+		}
+	}()
+
+	// Чтение сообщений от клиента (для поддержания соединения)
+	go func() {
+		defer func() {
+			wsManager.Unregister <- client
+			conn.Close()
+		}()
+
+		for {
+			_, _, err := conn.ReadMessage()
+			if err != nil {
+				break
+			}
+		}
+	}()
+}
