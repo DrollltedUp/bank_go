@@ -13,12 +13,11 @@ var Router = func(router *mux.Router) {
 	// Услуги
 	router.HandleFunc("/api/services", ticketcontroller.GetServiceTypesHandler).Methods("GET")
 
-	// Очередь и талоны
-	router.HandleFunc("/api/queue/{id}/ticket", ticketcontroller.CreateTicketHandler).Methods("POST")
-	router.HandleFunc("/api/queue/{id}/call", ticketcontroller.CallNextTicketHandler).Methods("POST")
-	router.HandleFunc("/api/queue/{id}/status", ticketcontroller.GetQueueStatusHandler).Methods("GET")
-
-	// Совместимость со старым кодом
-	router.HandleFunc("/grades", ticketcontroller.LoadGrades).Methods("GET")
+	// Талоны - ОСНОВНЫЕ МАРШРУТЫ
 	router.HandleFunc("/tickets/{id}", ticketcontroller.CreateTicketHandler).Methods("POST")
+	router.HandleFunc("/tickets/{id}/status", ticketcontroller.GetQueueStatusHandler).Methods("GET")
+	router.HandleFunc("/tickets/{id}/call", ticketcontroller.CallNextTicketHandler).Methods("POST")
+
+	// Для обратной совместимости
+	router.HandleFunc("/grades", ticketcontroller.LoadGrades).Methods("GET")
 }

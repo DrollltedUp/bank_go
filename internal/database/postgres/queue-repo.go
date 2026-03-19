@@ -3,6 +3,8 @@ package postgres
 import (
 	"database/sql"
 	"fmt"
+	"log"
+	"strings"
 	"time"
 
 	"github.com/DrollltedUp/bank_go/internal/model/ticket"
@@ -58,11 +60,36 @@ func (r *QueueRepository) CreateTicker(branchID, serviceCode string) (*ticket.Ti
 	}
 	defer tx.Rollback()
 
+	var branchExists bool
+	err = tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM branches WHERE branch_id = $1)`, branchID).Scan(&branchExists)
+	if err != nil {
+		return nil, err
+	}
+
+	if !branchExists {
+		parts := strings.Split(branchID, "-")
+		bankName := parts[0]
+
+		log.Printf("🏗️ Создаем новое отделение: %s", branchID)
+
+		_, err = tx.Exec(
+			`INSERT INTO branches (branch_id, bank_name, address, latitude, longitude, windows) 
+         VALUES ($1, $2, $3, $4, $5, $6)`,
+			branchID, bankName, "Адрес не указан", 0, 0, 2,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create branch: %v", err)
+		}
+	}
+
 	var queueID string
 	var currentNumber int
 	var ticketCount int
 
-	err = tx.QueryRow(`SELECT queue_id, current_number, ticket_count FROM queues WHERE branch_id = $1 FOR UPDATE`, branchID).Scan(&queueID, &currentNumber, &ticketCount)
+	err = tx.QueryRow(
+		`SELECT queue_id, current_number, tickets_count FROM queues WHERE branch_id = $1 FOR UPDATE`,
+		branchID,
+	).Scan(&queueID, &currentNumber, &ticketCount)
 
 	if err == sql.ErrNoRows {
 		err = tx.QueryRow(
@@ -130,8 +157,8 @@ func (r *QueueRepository) CreateTicker(branchID, serviceCode string) (*ticket.Ti
 
 	_, err = tx.Exec(
 		`UPDATE queues 
-		 SET current_number = $1, tickets_count = tickets_count + 1 
-		 WHERE queue_id = $2`,
+     SET current_number = $1, tickets_count = tickets_count + 1 
+     WHERE queue_id = $2`,
 		newNumber, queueID,
 	)
 	if err != nil {

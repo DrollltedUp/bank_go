@@ -1,12 +1,8 @@
--- Создание базы данных
-CREATE DATABASE bank_queue;
-\c bank_queue;
-
 -- Расширение для UUID
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
 -- Отделения банков
-CREATE TABLE branches (
+CREATE TABLE IF NOT EXISTS branches (
     branch_id VARCHAR(255) PRIMARY KEY,
     bank_name VARCHAR(255) NOT NULL,
     address TEXT NOT NULL,
@@ -15,23 +11,23 @@ CREATE TABLE branches (
     location_type VARCHAR(50) DEFAULT 'branch',
     opening_hours TEXT,
     phone VARCHAR(50),
-    windows INTEGER DEFAULT 2,           -- Количество открытых окон
+    windows INTEGER DEFAULT 2,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 -- Единая очередь для отделения
-CREATE TABLE queues (
+CREATE TABLE IF NOT EXISTS queues (
     queue_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     branch_id VARCHAR(255) REFERENCES branches(branch_id) ON DELETE CASCADE,
-    current_number INTEGER DEFAULT 0,    -- Текущий номер (для генерации)
-    tickets_count INTEGER DEFAULT 0,      -- Всего талонов в очереди
+    current_number INTEGER DEFAULT 0,
+    tickets_count INTEGER DEFAULT 0,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(branch_id)
 );
 
 -- Типы услуг (справочник)
-CREATE TABLE service_types (
+CREATE TABLE IF NOT EXISTS service_types (
     service_code VARCHAR(10) PRIMARY KEY,
     service_name VARCHAR(100) NOT NULL,
     description TEXT,
@@ -40,14 +36,14 @@ CREATE TABLE service_types (
 );
 
 -- Талоны (единая очередь)
-CREATE TABLE tickets (
+CREATE TABLE IF NOT EXISTS tickets (
     ticket_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    ticket_number VARCHAR(20) NOT NULL,   -- Например "A045" или "045"
+    ticket_number VARCHAR(20) NOT NULL,
     service_code VARCHAR(10) REFERENCES service_types(service_code),
     branch_id VARCHAR(255) REFERENCES branches(branch_id) ON DELETE CASCADE,
     queue_id UUID REFERENCES queues(queue_id),
-    position INTEGER NOT NULL,            -- Позиция в очереди
-    wait_time INTEGER,                   -- Прогнозируемое время ожидания
+    position INTEGER NOT NULL,
+    wait_time INTEGER,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     called_at TIMESTAMP,
     completed_at TIMESTAMP,
@@ -56,7 +52,7 @@ CREATE TABLE tickets (
 );
 
 -- История загруженности
-CREATE TABLE branch_load_history (
+CREATE TABLE IF NOT EXISTS branch_load_history (
     history_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     branch_id VARCHAR(255) REFERENCES branches(branch_id) ON DELETE CASCADE,
     load_score INTEGER CHECK (load_score BETWEEN 1 AND 5),
@@ -66,9 +62,9 @@ CREATE TABLE branch_load_history (
 );
 
 -- Индексы
-CREATE INDEX idx_tickets_branch_status ON tickets(branch_id, status);
-CREATE INDEX idx_tickets_created_at ON tickets(created_at);
-CREATE INDEX idx_branch_history_time ON branch_load_history(recorded_at);
+CREATE INDEX IF NOT EXISTS idx_tickets_branch_status ON tickets(branch_id, status);
+CREATE INDEX IF NOT EXISTS idx_tickets_created_at ON tickets(created_at);
+CREATE INDEX IF NOT EXISTS idx_branch_history_time ON branch_load_history(recorded_at);
 
 -- Вставка типов услуг
 INSERT INTO service_types (service_code, service_name, description, color) VALUES
@@ -78,7 +74,8 @@ INSERT INTO service_types (service_code, service_name, description, color) VALUE
     ('CREDIT', 'Кредитные карты', 'Оформление и консультация', '#96CEB4'),
     ('MORTGAGE', 'Ипотека и кредиты', 'Оформление ипотеки, автокредитов', '#FFEAA7'),
     ('VIP', 'Премиум-обслуживание', 'VIP-клиенты', '#DDA0DD'),
-    ('BUSINESS', 'Юридическим лицам', 'Расчетно-кассовое обслуживание', '#98D8C8');
+    ('BUSINESS', 'Юридическим лицам', 'Расчетно-кассовое обслуживание', '#98D8C8')
+ON CONFLICT (service_code) DO NOTHING;
 
 -- Функция обновления updated_at
 CREATE OR REPLACE FUNCTION update_updated_at_column()
@@ -89,11 +86,14 @@ BEGIN
 END;
 $$ language 'plpgsql';
 
+-- Триггеры
+DROP TRIGGER IF EXISTS update_branches_updated_at ON branches;
 CREATE TRIGGER update_branches_updated_at 
     BEFORE UPDATE ON branches 
     FOR EACH ROW 
     EXECUTE FUNCTION update_updated_at_column();
 
+DROP TRIGGER IF EXISTS update_queues_updated_at ON queues;
 CREATE TRIGGER update_queues_updated_at 
     BEFORE UPDATE ON queues 
     FOR EACH ROW 
