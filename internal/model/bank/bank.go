@@ -5,9 +5,9 @@ type BankLocation struct {
 	Address      string  `json:"address"`
 	Latitude     float64 `json:"lat"`
 	Longitude    float64 `json:"lng"`
-	BIC          string  `json:"bic,omitempty"`
-	Swift        string  `json:"swift,omitempty"`
-	LocationType string  `json:"type"` // "branch" или "atm"
+	LocationType string  `json:"type"`
+	OpeningHours string  `json:"opening_hours,omitempty"`
+	Phone        string  `json:"phone,omitempty"`
 
 	LoadScore int    `json:"load_score"`
 	LoadColor string `json:"load_color"`
