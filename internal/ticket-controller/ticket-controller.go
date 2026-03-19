@@ -1,11 +1,13 @@
 package ticketcontroller
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
 
+	"github.com/DrollltedUp/bank_go/internal/database/postgres"
 	queue "github.com/DrollltedUp/bank_go/internal/generate/manager-queue"
 	"github.com/DrollltedUp/bank_go/internal/geoGet/geocoder"
 	"github.com/DrollltedUp/bank_go/internal/geoGet/overpass"
@@ -236,13 +238,44 @@ func CallNextTicketHandler(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// Получить текущий вызываемый талон
+func GetCurrentTicketHandler(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	branchID := vars["id"]
+
+	if branchID == "" {
+		http.Error(w, "branch_id is required", 400)
+		return
+	}
+
+	// Получаем последний вызванный талон из БД
+	var ticket ticket.Ticket
+	err := postgres.GetPostgresClient().DB.QueryRow(
+		`SELECT ticket_id, ticket_number, service_code, service_name, created_at 
+         FROM tickets 
+         WHERE branch_id = $1 AND status = 'called' 
+         ORDER BY called_at DESC 
+         LIMIT 1`,
+		branchID,
+	).Scan(&ticket.ID, &ticket.TicketNumber, &ticket.ServiceCode, &ticket.ServiceName, &ticket.CreatedAt)
+
+	if err == sql.ErrNoRows {
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"ticket_number": "---",
+			"service_name":  "Ожидание",
+		})
+		return
+	}
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+
+	json.NewEncoder(w).Encode(ticket)
+}
+
 // GetServiceTypesHandler - получить список услуг
 func GetServiceTypesHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(ticket.ServiceTypes)
 }
-
-// // Вспомогательная функция
-// func generateBranchID(bankName string, lat, lng float64) string {
-// 	return fmt.Sprintf("%s-%.4f-%.4f", bankName, lat, lng)
-// }

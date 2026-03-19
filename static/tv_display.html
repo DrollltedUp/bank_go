@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Банковское ТВ-табло</title>
+    <style>
+        body { 
+            font-family: Arial, sans-serif; 
+            background: #f0f2f5; 
+            margin: 0; 
+            padding: 20px;
+        }
+        h1 { 
+            color: #1a73e8; 
+            text-align: center; 
+        }
+        .container { 
+            max-width: 1200px; 
+            margin: 0 auto; 
+        }
+        .branch-card { 
+            background: white; 
+            border-radius: 10px; 
+            padding: 20px; 
+            margin-bottom: 20px; 
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1); 
+        }
+        .load-green { color: #0f9d58; }
+        .load-yellow { color: #f4b400; }
+        .load-red { color: #db4437; }
+        .ticket-number { 
+            font-size: 2em; 
+            font-weight: bold; 
+            color: #1a73e8; 
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🏦 Банковское ТВ-табло</h1>
+        <div id="status">Загрузка...</div>
+        <div id="branches"></div>
+    </div>
+
+    <script>
+        const API_BASE = 'http://localhost:8080';
+        
+        async function loadData() {
+            try {
+                const response = await fetch(`${API_BASE}/api/bank/branches`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ bank: 'Сбербанк', city: 'Москва' })
+                });
+                
+                const branches = await response.json();
+                displayBranches(branches);
+                document.getElementById('status').innerHTML = '✅ Данные загружены';
+            } catch (error) {
+                document.getElementById('status').innerHTML = '❌ Ошибка загрузки';
+                console.error(error);
+            }
+        }
+        
+        async function displayBranches(branches) {
+            const container = document.getElementById('branches');
+            container.innerHTML = '';
+            
+            for (const branch of branches.slice(0, 3)) {
+                const branchId = `${branch.bank_name}-${branch.lat.toFixed(4)}-${branch.lng.toFixed(4)}`;
+                
+                try {
+                    const statusRes = await fetch(`${API_BASE}/tickets/${branchId}/status`);
+                    const status = await statusRes.json();
+                    
+                    const card = document.createElement('div');
+                    card.className = 'branch-card';
+                    
+                    let loadClass = 'load-green';
+                    if (status.load_score >= 4) loadClass = 'load-red';
+                    else if (status.load_score >= 3) loadClass = 'load-yellow';
+                    
+                    card.innerHTML = `
+                        <h3>${branch.address.split(',')[0]}</h3>
+                        <p>Оценка загрузки: <span class="${loadClass}">${status.load_label} (${status.load_score}/5)</span></p>
+                        <p>Талоны в очереди: <span class="ticket-number">${status.tickets || 0}</span></p>
+                        <p>Время ожидания: ${status.wait_time || 0} мин</p>
+                        <p>Окон: ${status.windows || 2}</p>
+                        <small>ID: ${branchId}</small>
+                    `;
+                    
+                    container.appendChild(card);
+                } catch (e) {
+                    console.error(e);
+                }
+            }
+        }
+        
+        loadData();
+        setInterval(loadData, 5000);
+    </script>
+</body>
+</html>
