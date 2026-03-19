@@ -21,4 +21,7 @@ var Router = func(router *mux.Router) {
 
 	// Для обратной совместимости
 	router.HandleFunc("/grades", ticketcontroller.LoadGrades).Methods("GET")
+
+	// WebSocket для real-time обновлений
+	router.HandleFunc("/ws", ticketcontroller.WebSocketHandler)
 }
